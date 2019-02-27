@@ -1,0 +1,25 @@
+global:
+  enabled: false
+  domain: test
+
+server:
+  enabled: true
+  replicas: 1
+  bootstrapExpect: 1
+  storage: 10Gi
+  connect: true
+  extraConfig: |
+    {
+      "disable_update_check": true
+    }
+  loglevel: info
+
+ui:
+  enabled: true
+
+client:
+  enabled: true
+
+connectInject:
+  enabled: true
+  default: false

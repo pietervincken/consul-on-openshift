@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    consul.hashicorp.com/connect-inject: "true"
+    consul.hashicorp.com/connect-inject-status: injected
+    consul.hashicorp.com/connect-service: couchdb
+    consul.hashicorp.com/connect-service-port: http
+  labels:
+    app.kubernetes.io/instance: couchdb
+    app.kubernetes.io/name: couchdb
+    statefulset.kubernetes.io/pod-name: couchdb-0
+  name: couchdb-0
+  namespace: default
+spec:
+  containers:
+    - image: couchdb:2.3.0
+      imagePullPolicy: IfNotPresent
+      livenessProbe:
+        exec:
+          command:
+            - curl
+            - http://localhost:5984/_up
+        failureThreshold: 3
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      name: couchdb
+      ports:
+        - containerPort: 5984
+          name: http
+          protocol: TCP
+      readinessProbe:
+        exec:
+          command:
+            - curl
+            - http://localhost:5984/_up
+        failureThreshold: 3
+        periodSeconds: 10
+        successThreshold: 1
+        timeoutSeconds: 1
+      resources:
+        limits:
+          cpu: "1"
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 128Mi
+      volumeMounts:
+        - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          name: couchdb-token-blcvl
+          readOnly: true
+    - name: consul-connect-envoy-sidecar
+      command:
+        - envoy
+        - --config-path
+        - /consul/connect-inject/envoy-bootstrap.yaml
+      env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+      image: envoyproxy/envoy-alpine:v1.8.0
+      imagePullPolicy: IfNotPresent
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |-
+                export CONSUL_HTTP_ADDR="${HOST_IP}:8500"
+                /consul/connect-inject/consul services deregister \
+                  /consul/connect-inject/service.hcl
+      resources: {}
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+        - mountPath: /consul/connect-inject
+          name: consul-connect-inject-data
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  hostname: couchdb-0
+  initContainers:
+    - name: consul-connect-inject-init
+      command:
+        - /bin/sh
+        - -ec
+        - "export CONSUL_HTTP_ADDR=\"${HOST_IP}:8500\"\nexport CONSUL_GRPC_ADDR=\"${HOST_IP}:8502\"\n\n#
+          Register the service. The HCL is stored in the volume so that\n# the preStop
+          hook can access it to deregister the service.\ncat <<EOF >/consul/connect-inject/service.hcl\nservices
+          {\n  id   = \"${POD_NAME}-couchdb-proxy\"\n  name = \"couchdb-proxy\"\n  kind
+          = \"connect-proxy\"\n  address = \"${POD_IP}\"\n  port = 20000\n\n  proxy {\n
+          \   destination_service_name = \"couchdb\"\n    destination_service_id = \"couchdb\"\n
+          \   local_service_address = \"127.0.0.1\"\n    local_service_port = 5984\n    \n
+          \ }\n\n  checks {\n    name = \"Proxy Public Listener\"\n    tcp = \"${POD_IP}:20000\"\n
+          \   interval = \"10s\"\n    deregister_critical_service_after = \"10m\"\n  }\n\n
+          \ checks {\n    name = \"Destination Alias\"\n    alias_service = \"couchdb\"\n
+          \ }\n}\nEOF\n\n/bin/consul services register /consul/connect-inject/service.hcl\n\n#
+          Generate the envoy bootstrap code\n/bin/consul connect envoy \\\n  -proxy-id=\"${POD_NAME}-couchdb-proxy\"
+          \\\n  -bootstrap > /consul/connect-inject/envoy-bootstrap.yaml\n\n# Copy the
+          Consul binary\ncp /bin/consul /consul/connect-inject/consul"
+      env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+      image: consul:1.4.2
+      imagePullPolicy: IfNotPresent
+      resources: {}
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+        - mountPath: /consul/connect-inject
+          name: consul-connect-inject-data
+  serviceAccount: couchdb
+  serviceAccountName: couchdb
+  volumes:
+    - emptyDir: {}
+      name: consul-connect-inject-data
