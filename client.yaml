@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    consul.hashicorp.com/connect-inject: "true"
+    consul.hashicorp.com/connect-inject-status: injected
+    consul.hashicorp.com/connect-service: static-client
+    consul.hashicorp.com/connect-service-upstreams: static-server:1234
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","kind":"Pod","metadata":{"annotations":{"consul.hashicorp.com/connect-inject":"true","consul.hashicorp.com/connect-service-upstreams":"static-server:1234"},"name":"static-client","namespace":"default"},"spec":{"containers":[{"args":["while true; do sleep 30; done;"],"command":["/bin/sh","-c","--"],"image":"tutum/curl:latest","name":"static-client"}]}}
+  name: static-client
+  namespace: default
+spec:
+  containers:
+    - args:
+        - while true; do sleep 30; done;
+      command:
+        - /bin/sh
+        - -c
+        - --
+      env:
+        - name: STATIC_SERVER_CONNECT_SERVICE_HOST
+          value: 127.0.0.1
+        - name: STATIC_SERVER_CONNECT_SERVICE_PORT
+          value: "1234"
+      image: tutum/curl:latest
+      imagePullPolicy: Always
+      name: static-client
+      resources: {}
+    - command:
+        - envoy
+        - --config-path
+        - /consul/connect-inject/envoy-bootstrap.yaml
+      env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+      image: envoyproxy/envoy-alpine:v1.8.0
+      imagePullPolicy: IfNotPresent
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |-
+                export CONSUL_HTTP_ADDR="${HOST_IP}:8500"
+                /consul/connect-inject/consul services deregister \
+                  /consul/connect-inject/service.hcl
+      name: consul-connect-envoy-sidecar
+      resources: {}
+      volumeMounts:
+        - mountPath: /consul/connect-inject
+          name: consul-connect-inject-data
+  initContainers:
+    - command:
+        - /bin/sh
+        - -ec
+        - "export CONSUL_HTTP_ADDR=\"${HOST_IP}:8500\"\nexport CONSUL_GRPC_ADDR=\"${HOST_IP}:8502\"\n\n#
+          Register the service. The HCL is stored in the volume so that\n# the preStop
+          hook can access it to deregister the service.\ncat <<EOF >/consul/connect-inject/service.hcl\nservices
+          {\n  id   = \"${POD_NAME}-static-client-proxy\"\n  name = \"static-client-proxy\"\n
+          \ kind = \"connect-proxy\"\n  address = \"${POD_IP}\"\n  port = 20000\n\n  proxy
+          {\n    destination_service_name = \"static-client\"\n    destination_service_id
+          = \"static-client\"\n    upstreams {\n      destination_name = \"static-server\"\n
+          \     local_bind_port = 1234\n    }\n    \n  }\n\n  checks {\n    name = \"Proxy
+          Public Listener\"\n    tcp = \"${POD_IP}:20000\"\n    interval = \"10s\"\n    deregister_critical_service_after
+          = \"10m\"\n  }\n\n  checks {\n    name = \"Destination Alias\"\n    alias_service
+          = \"static-client\"\n  }\n}\nEOF\n\n/bin/consul services register /consul/connect-inject/service.hcl\n\n#
+          Generate the envoy bootstrap code\n/bin/consul connect envoy \\\n  -proxy-id=\"${POD_NAME}-static-client-proxy\"
+          \\\n  -bootstrap > /consul/connect-inject/envoy-bootstrap.yaml\n\n# Copy the
+          Consul binary\ncp /bin/consul /consul/connect-inject/consul"
+      env:
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+      image: consul:1.4.2
+      imagePullPolicy: IfNotPresent
+      name: consul-connect-inject-init
+      resources: {}
+      volumeMounts:
+        - mountPath: /consul/connect-inject
+          name: consul-connect-inject-data
+  volumes:
+    - emptyDir: {}
+      name: consul-connect-inject-data
