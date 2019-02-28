@@ -26,5 +26,4 @@ ui:
     type: LoadBalancer
 
 connectInject:
-  enabled: true
-  default: false
+  enabled: false
