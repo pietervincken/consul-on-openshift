@@ -6,12 +6,15 @@ global:
 
 server:
   enabled: true
-  replicas: 1
-  bootstrapExpect: 1
+  replicas: 3
+  bootstrapExpect: 3
   storage: 10Gi
+  connect: true
+  affinity:
 
 client:
   enabled: true
+  grpc: true
 
 dns:
   enabled: true
