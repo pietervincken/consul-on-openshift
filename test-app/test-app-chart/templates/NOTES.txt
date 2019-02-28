@@ -1,3 +1,0 @@
-# Nodejs test app. 
-
-This app connects to the CouchDB backend and is used in the Istio showcase.
